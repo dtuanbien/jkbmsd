@@ -1,6 +1,8 @@
 substitutions:
   name: jkbms-senergy
   jk_bms_mac: "C8:47:8C:10:79:7A"
+  can_tx_pin: GPIO4
+  can_rx_pin: GPIO5
 
 esphome:
   name: ${name}
@@ -30,7 +32,7 @@ ble_client:
 
 external_components:
   - source: github://syssi/esphome-jk-bms@main
-  - source: github://syssi/esphome-jk-bms-can@main
+    refresh: 0s
 
 jk_bms_ble:
   - ble_client_id: client0
@@ -41,19 +43,54 @@ jk_bms_ble:
 canbus:
   - platform: esp32_can
     id: can_bus
-    tx_pin: GPIO4
-    rx_pin: GPIO5
+    tx_pin: ${can_tx_pin}
+    rx_pin: ${can_rx_pin}
     bit_rate: 500kbps
 
-jk_bms_can:
-  - jk_bms_ble_id: bms0
-    canbus_id: can_bus
-    protocol: PYLON
-    update_interval: 1s
-    charge_voltage: 28.4V
-    charge_current_limit: 70A
-    discharge_current_limit: 75A
-    discharge_voltage: 25.0V
+interval:
+  - interval: 1000ms
+    then:
+      # Gửi giới hạn sạc xả Pylontech (ID 0x351): 28.4V | 70A | 75A | 25.0V
+      - canbus.send:
+          canbus_id: can_bus
+          can_id: 0x351
+          data: [0x18, 0x01, 0xBC, 0x02, 0xEE, 0x02, 0xFA, 0x00]
+      # Gửi SoC & SoH (ID 0x355)
+      - canbus.send:
+          canbus_id: can_bus
+          can_id: 0x355
+          data: !lambda |-
+            uint16_t soc = (uint16_t)id(state_of_charge).state;
+            uint16_t soh = 100;
+            return {
+              (uint8_t)(soc & 0xFF), (uint8_t)(soc >> 8),
+              (uint8_t)(soh & 0xFF), (uint8_t)(soh >> 8),
+              0x00, 0x00, 0x00, 0x00
+            };
+      # Gửi Điện áp, Dòng điện, Nhiệt độ (ID 0x356)
+      - canbus.send:
+          canbus_id: can_bus
+          can_id: 0x356
+          data: !lambda |-
+            int16_t volt = (int16_t)(id(total_voltage).state * 100);
+            int16_t curr = (int16_t)(id(current).state * 10);
+            int16_t temp = (int16_t)(id(temp_1).state * 10);
+            return {
+              (uint8_t)(volt & 0xFF), (uint8_t)(volt >> 8),
+              (uint8_t)(curr & 0xFF), (uint8_t)(curr >> 8),
+              (uint8_t)(temp & 0xFF), (uint8_t)(temp >> 8),
+              0x00, 0x00
+            };
+      # Gửi cờ cho phép sạc/xả Pylontech (ID 0x35C)
+      - canbus.send:
+          canbus_id: can_bus
+          can_id: 0x35C
+          data: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      # Gửi định danh PYLON (ID 0x35E)
+      - canbus.send:
+          canbus_id: can_bus
+          can_id: 0x35E
+          data: [0x50, 0x59, 0x4C, 0x4F, 0x4E, 0x20, 0x20, 0x20]
 
 sensor:
   - platform: jk_bms_ble
@@ -67,15 +104,6 @@ sensor:
     state_of_charge:
       name: "Battery SoC"
       id: state_of_charge
-    power_tube_temperature:
-      name: "MOS Temperature"
-      id: mos_temp
     temperature_sensor_1:
       name: "Battery Temp 1"
       id: temp_1
-    min_cell_voltage:
-      name: "Min Cell Voltage"
-      id: min_cell_voltage
-    max_cell_voltage:
-      name: "Max Cell Voltage"
-      id: max_cell_voltage
