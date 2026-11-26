@@ -1,0 +1,81 @@
+substitutions:
+  name: jkbms-senergy
+  jk_bms_mac: "C8:47:8C:10:79:7A"
+
+esphome:
+  name: ${name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO
+
+wifi:
+  ssid: "TUAN BIEN"
+  password: "76767676"
+
+ota:
+  platform: esphome
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: false
+
+ble_client:
+  - mac_address: ${jk_bms_mac}
+    id: client0
+
+external_components:
+  - source: github://syssi/esphome-jk-bms@main
+  - source: github://syssi/esphome-jk-bms-can@main
+
+jk_bms_ble:
+  - ble_client_id: client0
+    protocol_version: JK02_32S
+    throttle: 2s
+    id: bms0
+
+canbus:
+  - platform: esp32_can
+    id: can_bus
+    tx_pin: GPIO4
+    rx_pin: GPIO5
+    bit_rate: 500kbps
+
+jk_bms_can:
+  - jk_bms_ble_id: bms0
+    canbus_id: can_bus
+    protocol: PYLON
+    update_interval: 1s
+    charge_voltage: 28.4V
+    charge_current_limit: 70A
+    discharge_current_limit: 75A
+    discharge_voltage: 25.0V
+
+sensor:
+  - platform: jk_bms_ble
+    jk_bms_ble_id: bms0
+    total_voltage:
+      name: "Battery Voltage"
+      id: total_voltage
+    current:
+      name: "Battery Current"
+      id: current
+    state_of_charge:
+      name: "Battery SoC"
+      id: state_of_charge
+    power_tube_temperature:
+      name: "MOS Temperature"
+      id: mos_temp
+    temperature_sensor_1:
+      name: "Battery Temp 1"
+      id: temp_1
+    min_cell_voltage:
+      name: "Min Cell Voltage"
+      id: min_cell_voltage
+    max_cell_voltage:
+      name: "Max Cell Voltage"
+      id: max_cell_voltage
