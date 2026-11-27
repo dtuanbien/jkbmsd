@@ -59,7 +59,6 @@ jk_bms_ble:
 canbus:
   - platform: esp32_can
     id: can_bus
-    can_id: 4
     tx_pin: GPIO4
     rx_pin: GPIO5
     bit_rate: 500kbps
@@ -109,7 +108,7 @@ interval:
           can_id: 0x35E
           data: [0x50, 0x59, 0x4C, 0x4F, 0x4E, 0x20, 0x20, 0x20]
 
-  # Đẩy toàn bộ thông số lên App Blynk mỗi 5 giây để xem qua 4G
+  # Đẩy thông số lên App Blynk mỗi 5 giây để xem qua 4G
   - interval: 5s
     then:
       - http_request.get:
@@ -283,66 +282,59 @@ number:
     jk_bms_ble_id: bms0
     total_battery_capacity:
       name: "Pin - Dung Luong (Ah)"
-    cell_count:
-      name: "Pin - So Cell"
+    max_charge_current:
+      name: "Pin - Dong Sac Toi Da BMS (A)"
+    max_discharge_current:
+      name: "Pin - Dong Xa Toi Da BMS (A)"
 
   - platform: template
-    name: "CAN - Ap Sac Toi Da (V)"
+    name: "CAN - Dien Ap Sac (V)"
     id: can_charge_v
     optimistic: true
-    restore_value: true
-    initial_value: 28.4
-    min_value: 24.0
-    max_value: 30.0
+    min_value: 25.0
+    max_value: 29.2
     step: 0.1
-    unit_of_measurement: "V"
-    mode: slider
+    initial_value: 28.4
+    restore_value: true
 
   - platform: template
-    name: "CAN - Ap Cat Xa (V)"
+    name: "CAN - Dien Ap Xa (V)"
     id: can_discharge_v
     optimistic: true
-    restore_value: true
-    initial_value: 25.0
-    min_value: 20.0
-    max_value: 26.0
+    min_value: 22.0
+    max_value: 26.5
     step: 0.1
-    unit_of_measurement: "V"
-    mode: slider
+    initial_value: 25.2
+    restore_value: true
 
   - platform: template
     name: "CAN - Dong Sac Toi Da (A)"
     id: can_charge_i
     optimistic: true
-    restore_value: true
-    initial_value: 70
-    min_value: 1
-    max_value: 150
+    min_value: 0
+    max_value: 100
     step: 1
-    unit_of_measurement: "A"
-    mode: slider
+    initial_value: 60
+    restore_value: true
 
   - platform: template
     name: "CAN - Dong Xa Toi Da (A)"
     id: can_discharge_i
     optimistic: true
-    restore_value: true
-    initial_value: 75
-    min_value: 1
+    min_value: 0
     max_value: 150
     step: 1
-    unit_of_measurement: "A"
-    mode: slider
+    initial_value: 75
+    restore_value: true
 
   - platform: modbus_controller
     modbus_controller_id: senergy_inv
-    name: "Senergy - Cong Suat Day Luoi PV (W)"
+    name: "Senergy - Cong Suat Day Luoi (W)"
     id: senergy_export_limit
     address: 0x2015
     register_type: holding
     value_type: U_WORD
     min_value: 0
     max_value: 4000
-    step: 100
+    step: 50
     unit_of_measurement: "W"
-    mode: slider
