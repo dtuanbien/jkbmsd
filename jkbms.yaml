@@ -1,8 +1,7 @@
 substitutions:
   name: jkbms-senergy
   jk_bms_mac: "C8:47:8C:10:79:7A"
-  can_tx_pin: GPIO4
-  can_rx_pin: GPIO5
+  blynk_token: "DAN_MA_BLYNK_AUTH_TOKEN_CUA_BAN_VAO_DAY"
 
 esphome:
   name: ${name}
@@ -13,15 +12,30 @@ esp32:
     type: esp-idf
 
 logger:
-  level: INFO
+  level: WARN
 
 wifi:
   ssid: "TUAN BIEN"
   password: "76767676"
+  manual_ip:
+    static_ip: 192.168.1.200
+    gateway: 192.168.1.1
+    subnet: 255.255.255.0
+
+web_server:
+  port: 80
+  version: 3
+
+http_request:
+  useragent: esphome/device
+  timeout: 3s
 
 ota:
   platform: esphome
 
+# ==========================================
+# 1. BLUETOOTH JK BMS
+# ==========================================
 esp32_ble_tracker:
   scan_parameters:
     active: false
@@ -32,78 +46,303 @@ ble_client:
 
 external_components:
   - source: github://syssi/esphome-jk-bms@main
-    refresh: 0s
 
 jk_bms_ble:
   - ble_client_id: client0
     protocol_version: JK02_32S
-    throttle: 2s
+    throttle: 3s
     id: bms0
 
+# ==========================================
+# 2. CỔNG CAN PYLONTECH GỬI SENERGY 4KW
+# ==========================================
 canbus:
   - platform: esp32_can
     id: can_bus
-    tx_pin: ${can_tx_pin}
-    rx_pin: ${can_rx_pin}
+    can_id: 4
+    tx_pin: GPIO4
+    rx_pin: GPIO5
     bit_rate: 500kbps
 
 interval:
-  - interval: 1000ms
+  # Gửi dữ liệu CAN sang biến tần mỗi 1 giây
+  - interval: 1s
     then:
-      # Gửi giới hạn sạc xả Pylontech (ID 0x351): 28.4V | 70A | 75A | 25.0V
       - canbus.send:
           canbus_id: can_bus
           can_id: 0x351
-          data: [0x18, 0x01, 0xBC, 0x02, 0xEE, 0x02, 0xFA, 0x00]
-      # Gửi SoC & SoH (ID 0x355)
+          data: !lambda |-
+            uint16_t cv = (uint16_t)(id(can_charge_v).state * 10);
+            uint16_t ci = (uint16_t)(id(can_charge_i).state * 10);
+            uint16_t di = (uint16_t)(id(can_discharge_i).state * 10);
+            uint16_t dv = (uint16_t)(id(can_discharge_v).state * 10);
+            return {
+              (uint8_t)(cv & 0xFF), (uint8_t)(cv >> 8),
+              (uint8_t)(ci & 0xFF), (uint8_t)(ci >> 8),
+              (uint8_t)(di & 0xFF), (uint8_t)(di >> 8),
+              (uint8_t)(dv & 0xFF), (uint8_t)(dv >> 8)
+            };
       - canbus.send:
           canbus_id: can_bus
           can_id: 0x355
           data: !lambda |-
-            uint16_t soc = (uint16_t)id(state_of_charge).state;
-            uint16_t soh = 100;
-            return {
-              (uint8_t)(soc & 0xFF), (uint8_t)(soc >> 8),
-              (uint8_t)(soh & 0xFF), (uint8_t)(soh >> 8),
-              0x00, 0x00, 0x00, 0x00
-            };
-      # Gửi Điện áp, Dòng điện, Nhiệt độ (ID 0x356)
+            uint16_t soc = isnan(id(state_of_charge).state) ? 50 : (uint16_t)id(state_of_charge).state;
+            return {(uint8_t)(soc & 0xFF), (uint8_t)(soc >> 8), 100, 0, 0, 0, 0, 0};
       - canbus.send:
           canbus_id: can_bus
           can_id: 0x356
           data: !lambda |-
-            int16_t volt = (int16_t)(id(total_voltage).state * 100);
-            int16_t curr = (int16_t)(id(current).state * 10);
-            int16_t temp = (int16_t)(id(temp_1).state * 10);
+            int16_t v = isnan(id(total_voltage).state) ? 2640 : (int16_t)(id(total_voltage).state * 100);
+            int16_t i = isnan(id(current).state) ? 0 : (int16_t)(id(current).state * 10);
+            int16_t t = isnan(id(temp_1).state) ? 250 : (int16_t)(id(temp_1).state * 10);
             return {
-              (uint8_t)(volt & 0xFF), (uint8_t)(volt >> 8),
-              (uint8_t)(curr & 0xFF), (uint8_t)(curr >> 8),
-              (uint8_t)(temp & 0xFF), (uint8_t)(temp >> 8),
-              0x00, 0x00
+              (uint8_t)(v & 0xFF), (uint8_t)(v >> 8),
+              (uint8_t)(i & 0xFF), (uint8_t)(i >> 8),
+              (uint8_t)(t & 0xFF), (uint8_t)(t >> 8), 0, 0
             };
-      # Gửi cờ cho phép sạc/xả Pylontech (ID 0x35C)
       - canbus.send:
           canbus_id: can_bus
           can_id: 0x35C
           data: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
-      # Gửi định danh PYLON (ID 0x35E)
       - canbus.send:
           canbus_id: can_bus
           can_id: 0x35E
           data: [0x50, 0x59, 0x4C, 0x4F, 0x4E, 0x20, 0x20, 0x20]
 
+  # Đẩy toàn bộ thông số lên App Blynk mỗi 5 giây để xem qua 4G
+  - interval: 5s
+    then:
+      - http_request.get:
+          url: !lambda |-
+            char buf[280];
+            float soc = isnan(id(state_of_charge).state) ? 0 : id(state_of_charge).state;
+            float v = isnan(id(total_voltage).state) ? 0 : id(total_voltage).state;
+            float i = isnan(id(current).state) ? 0 : id(current).state;
+            float pv1 = isnan(id(pv1_power).state) ? 0 : id(pv1_power).state;
+            float load = isnan(id(load_power).state) ? 0 : id(load_power).state;
+            snprintf(buf, sizeof(buf),
+              "http://blynk.cloud{blynk_token}&V0=%.0f&V1=%.2f&V2=%.1f&V3=%.0f&V4=%.0f",
+              soc, v, i, pv1, load);
+            return std::string(buf);
+
+  # Đọc lệnh điều khiển Công suất đẩy lưới (V6) từ App Blynk mỗi 6 giây
+  - interval: 6s
+    then:
+      - http_request.get:
+          url: "http://blynk.cloud{blynk_token}&V6"
+          capture_response: true
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    float val = atof(body.c_str());
+                    if (val >= 0 && val <= 4000 && val != id(senergy_export_limit).state) {
+                      auto call = id(senergy_export_limit).make_call();
+                      call.set_value(val);
+                      call.perform();
+                    }
+                  }
+
+  # Đọc lệnh Bật/Tắt đẩy lưới (V5) từ App Blynk mỗi 7 giây
+  - interval: 7s
+    then:
+      - http_request.get:
+          url: "http://blynk.cloud{blynk_token}&V5"
+          capture_response: true
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    int sw = atoi(body.c_str());
+                    if (sw == 1 && !id(senergy_export_sw).state) {
+                      id(senergy_export_sw).turn_on();
+                    } else if (sw == 0 && id(senergy_export_sw).state) {
+                      id(senergy_export_sw).turn_off();
+                    }
+                  }
+
+# ==========================================
+# 3. GIAO TIẾP RS485 VỚI BIẾN TẦN SENERGY
+# ==========================================
+uart:
+  - id: uart_rs485
+    tx_pin: GPIO17
+    rx_pin: GPIO16
+    baud_rate: 9600
+
+modbus:
+  - id: modbus_senergy
+    uart_id: uart_rs485
+
+modbus_controller:
+  - id: senergy_inv
+    address: 0x01
+    modbus_id: modbus_senergy
+    update_interval: 5s
+
+# ==========================================
+# 4. CẢM BIẾN HIỂN THỊ (JK BMS + SENERGY)
+# ==========================================
 sensor:
   - platform: jk_bms_ble
     jk_bms_ble_id: bms0
     total_voltage:
-      name: "Battery Voltage"
+      name: "Pin - Total Voltage"
       id: total_voltage
     current:
-      name: "Battery Current"
+      name: "Pin - Current"
       id: current
+    power:
+      name: "Pin - Power"
     state_of_charge:
-      name: "Battery SoC"
+      name: "Pin - State of Charge"
       id: state_of_charge
+    mosfet_temperature:
+      name: "Pin - Nhiet Do MOS"
     temperature_sensor_1:
-      name: "Battery Temp 1"
+      name: "Pin - Temperature 1"
       id: temp_1
+    min_cell_voltage:
+      name: "Pin - Min Cell Voltage"
+    max_cell_voltage:
+      name: "Pin - Max Cell Voltage"
+    delta_cell_voltage:
+      name: "Pin - Delta Cell Voltage"
+    cell_voltage_1:
+      name: "Pin - Cell 1 Voltage"
+    cell_voltage_2:
+      name: "Pin - Cell 2 Voltage"
+    cell_voltage_3:
+      name: "Pin - Cell 3 Voltage"
+    cell_voltage_4:
+      name: "Pin - Cell 4 Voltage"
+    cell_voltage_5:
+      name: "Pin - Cell 5 Voltage"
+    cell_voltage_6:
+      name: "Pin - Cell 6 Voltage"
+    cell_voltage_7:
+      name: "Pin - Cell 7 Voltage"
+    cell_voltage_8:
+      name: "Pin - Cell 8 Voltage"
+
+  - platform: modbus_controller
+    modbus_controller_id: senergy_inv
+    name: "Senergy - Dien Ap Luoi (V)"
+    address: 0x1000
+    register_type: read
+    value_type: U_WORD
+    accuracy_decimals: 1
+    filters:
+      - multiply: 0.1
+    unit_of_measurement: "V"
+
+  - platform: modbus_controller
+    modbus_controller_id: senergy_inv
+    name: "Senergy - Cong Suat PV1 (W)"
+    id: pv1_power
+    address: 0x100A
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: "W"
+
+  - platform: modbus_controller
+    modbus_controller_id: senergy_inv
+    name: "Senergy - Cong Suat Tai (W)"
+    id: load_power
+    address: 0x1018
+    register_type: read
+    value_type: S_WORD
+    unit_of_measurement: "W"
+
+# ==========================================
+# 5. CÔNG TẮC BẬT/TẮT
+# ==========================================
+switch:
+  - platform: jk_bms_ble
+    jk_bms_ble_id: bms0
+    charging:
+      name: "Pin - Cong Tac Sac BMS"
+    discharging:
+      name: "Pin - Cong Tac Xa BMS"
+    balancer:
+      name: "Pin - Can Bang Cell"
+
+  - platform: modbus_controller
+    modbus_controller_id: senergy_inv
+    name: "Senergy - Cho Phep Day Luoi"
+    id: senergy_export_sw
+    address: 0x2014
+    register_type: holding
+    bitmask: 1
+
+# ==========================================
+# 6. THANH TRƯỢT ĐIỀU CHỈNH
+# ==========================================
+number:
+  - platform: jk_bms_ble
+    jk_bms_ble_id: bms0
+    total_battery_capacity:
+      name: "Pin - Dung Luong (Ah)"
+    cell_count:
+      name: "Pin - So Cell"
+
+  - platform: template
+    name: "CAN - Ap Sac Toi Da (V)"
+    id: can_charge_v
+    optimistic: true
+    restore_value: true
+    initial_value: 28.4
+    min_value: 24.0
+    max_value: 30.0
+    step: 0.1
+    unit_of_measurement: "V"
+    mode: slider
+
+  - platform: template
+    name: "CAN - Ap Cat Xa (V)"
+    id: can_discharge_v
+    optimistic: true
+    restore_value: true
+    initial_value: 25.0
+    min_value: 20.0
+    max_value: 26.0
+    step: 0.1
+    unit_of_measurement: "V"
+    mode: slider
+
+  - platform: template
+    name: "CAN - Dong Sac Toi Da (A)"
+    id: can_charge_i
+    optimistic: true
+    restore_value: true
+    initial_value: 70
+    min_value: 1
+    max_value: 150
+    step: 1
+    unit_of_measurement: "A"
+    mode: slider
+
+  - platform: template
+    name: "CAN - Dong Xa Toi Da (A)"
+    id: can_discharge_i
+    optimistic: true
+    restore_value: true
+    initial_value: 75
+    min_value: 1
+    max_value: 150
+    step: 1
+    unit_of_measurement: "A"
+    mode: slider
+
+  - platform: modbus_controller
+    modbus_controller_id: senergy_inv
+    name: "Senergy - Cong Suat Day Luoi PV (W)"
+    id: senergy_export_limit
+    address: 0x2015
+    register_type: holding
+    value_type: U_WORD
+    min_value: 0
+    max_value: 4000
+    step: 100
+    unit_of_measurement: "W"
+    mode: slider
